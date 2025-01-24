@@ -1,0 +1,60 @@
+---
+version: "3.3"
+
+services:
+  main:
+    build: .
+    ports:
+      - "8081:8081"
+    environment:
+      # setting up koanf prefix to read environment variables
+      CONFIG_PREFIX: "GS_"
+
+      # logging
+      GS_LOG_LEVEL: "info"
+
+      # metrics
+      GS_METRICS_ENABLED: "true"
+      GS_METRICS_PORT: "8081"
+
+      # tracing
+      GS_TRACING_ENABLED: "false"
+      GS_TRACING_SAMPLERATE: "1.0"
+      GS_TRACING_SERVICE: "go-start"
+      GS_TRACING_VERSION: "0.0.1"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
+
+      # grpc (otlp tracing)
+      GRPC_GO_LOG_VERBOSITY_LEVEL: 99
+      GRPC_GO_LOG_SEVERITY_LEVEL: info
+
+  prometheus:
+    image: prom/prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  tempo:
+    image: grafana/tempo:latest
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./docker/tempo/tempo.yml:/etc/tempo.yaml
+      - /tmp/tempo-data:/tmp/tempo
+    ports:
+      - "4317:4317" #  otlp grpc
+      - "4318:4318" #  otlp http
+
+  grafana:
+    image: grafana/grafana
+    volumes:
+      - ./docker/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml
+      - ./docker/grafana/dashboard.yaml:/etc/grafana/provisioning/dashboards/main.yaml
+      - ./docker/grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_DISABLE_LOGIN_FORM=true
+      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor
+    ports:
+      - "3000:3000"
