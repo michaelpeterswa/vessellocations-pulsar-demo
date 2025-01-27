@@ -1,37 +1,31 @@
-package main
+package core
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
-	"time"
 
-	"github.com/alpineworks/ootel"
-	"github.com/michaelpeterswa/go-start/internal/config"
-	"github.com/michaelpeterswa/go-start/internal/logging"
+	"alpineworks.io/ootel"
+	"github.com/michaelpeterswa/vessellocations-pulsar-demo/internal/config"
+	"github.com/michaelpeterswa/vessellocations-pulsar-demo/internal/logging"
 )
 
-func main() {
+func Init(ctx context.Context) (func(context.Context) error, error) {
 	slogHandler := slog.NewJSONHandler(os.Stdout, nil)
 	slog.SetDefault(slog.New(slogHandler))
 
-	slog.Info("welcome to go-start!")
-
 	c, err := config.NewConfig()
 	if err != nil {
-		slog.Error("could not create config", slog.String("error", err.Error()))
-		os.Exit(1)
+		return nil, fmt.Errorf("unable to load main config: %w", err)
 	}
 
 	slogLevel, err := logging.LogLevelToSlogLevel(c.LogLevel)
 	if err != nil {
-		slog.Error("could not parse log level", slog.String("error", err.Error()))
-		os.Exit(1)
+		return nil, fmt.Errorf("failed to convert slog level: %w", err)
 	}
 
 	slog.SetLogLoggerLevel(slogLevel)
-
-	ctx := context.Background()
 
 	ootelClient := ootel.NewOotelClient(
 		ootel.WithMetricConfig(
@@ -52,12 +46,8 @@ func main() {
 
 	shutdown, err := ootelClient.Init(ctx)
 	if err != nil {
-		panic(err)
+		return nil, fmt.Errorf("failed to initialize ootel: %w", err)
 	}
 
-	defer func() {
-		_ = shutdown(ctx)
-	}()
-
-	<-time.After(2 * time.Minute)
+	return shutdown, nil
 }
