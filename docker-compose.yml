@@ -1,60 +1,133 @@
 ---
-version: "3.3"
-
 services:
-  main:
+  write:
     build: .
+    command:
+      - /vessellocations-pulsar-demo
+      - write
     ports:
       - "8081:8081"
     environment:
-      # setting up koanf prefix to read environment variables
-      CONFIG_PREFIX: "GS_"
-
       # logging
-      GS_LOG_LEVEL: "info"
+      LOG_LEVEL: "info"
 
       # metrics
-      GS_METRICS_ENABLED: "true"
-      GS_METRICS_PORT: "8081"
+      METRICS_ENABLED: "true"
+      METRICS_PORT: "8081"
 
       # tracing
-      GS_TRACING_ENABLED: "false"
-      GS_TRACING_SAMPLERATE: "1.0"
-      GS_TRACING_SERVICE: "go-start"
-      GS_TRACING_VERSION: "0.0.1"
-      OTEL_EXPORTER_OTLP_ENDPOINT: "http://tempo:4317"
+      TRACING_ENABLED: "true"
+      TRACING_SAMPLERATE: "1.0"
+      TRACING_SERVICE: "go-start"
+      TRACING_VERSION: "0.0.1"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://alloy:4317"
+
+      WSDOT_API_KEY: ${WSDOT_API_KEY}
+      PULSAR_ADDR: "pulsar://pulsar:6650"
+      PULSAR_TOPIC: "public/vlpd/vessellocations"
 
       # grpc (otlp tracing)
-      GRPC_GO_LOG_VERBOSITY_LEVEL: 99
-      GRPC_GO_LOG_SEVERITY_LEVEL: info
+      # GRPC_GO_LOG_VERBOSITY_LEVEL: 99
+      # GRPC_GO_LOG_SEVERITY_LEVEL: info
+    depends_on:
+      pulsar-init:
+        condition: service_completed_successfully
 
-  prometheus:
-    image: prom/prometheus
+  read:
+    build: .
+    command:
+      - /vessellocations-pulsar-demo
+      - read
     ports:
-      - "9090:9090"
-    volumes:
-      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - "8082:8081"
 
-  tempo:
-    image: grafana/tempo:latest
-    command: ["-config.file=/etc/tempo.yaml"]
+    environment:
+      # logging
+      LOG_LEVEL: "info"
+
+      # metrics
+      METRICS_ENABLED: "true"
+      METRICS_PORT: "8081"
+
+      # tracing
+      TRACING_ENABLED: "true"
+      TRACING_SAMPLERATE: "1.0"
+      TRACING_SERVICE: "go-start"
+      TRACING_VERSION: "0.0.1"
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://alloy:4317"
+
+      PULSAR_ADDR: "pulsar://pulsar:6650"
+      PULSAR_TOPIC: "public/vlpd/vessellocations"
+
+      # grpc (otlp tracing)
+      # GRPC_GO_LOG_VERBOSITY_LEVEL: 99
+      # GRPC_GO_LOG_SEVERITY_LEVEL: info
+    depends_on:
+      pulsar-init:
+        condition: service_completed_successfully
+
+  alloy:
+    image: grafana/alloy
+    command:
+      - run
+      - --server.http.listen-addr
+      - 0.0.0.0:12345
+      - /config.alloy
     volumes:
-      - ./docker/tempo/tempo.yml:/etc/tempo.yaml
-      - /tmp/tempo-data:/tmp/tempo
+      - ./docker/alloy/config.alloy:/config.alloy
+      # pass sock in for loki container discovery
+      - /var/run/docker.sock:/var/run/docker.sock
     ports:
-      - "4317:4317" #  otlp grpc
-      - "4318:4318" #  otlp http
+      - 12345:12345 # UI
+      - 4317:4317 # OTLP
+    depends_on:
+      lgtm:
+        condition: service_started
+    links:
+      - lgtm
 
-  grafana:
-    image: grafana/grafana
+  lgtm:
+    image: grafana/otel-lgtm
+    ports:
+      - "3000:3000" # Grafana UI
+      - "3100:3100" # Loki
+      - "3200:3200" # Tempo
+      - "9090:9090" # Prometheus
     volumes:
-      - ./docker/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml
-      - ./docker/grafana/dashboard.yaml:/etc/grafana/provisioning/dashboards/main.yaml
       - ./docker/grafana/dashboards:/var/lib/grafana/dashboards
+      - ./docker/grafana/dashboard.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/grafana-dashboards.yaml
     environment:
       - GF_AUTH_ANONYMOUS_ENABLED=true
       - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
       - GF_AUTH_DISABLE_LOGIN_FORM=true
-      - GF_FEATURE_TOGGLES_ENABLE=traceqlEditor
+
+  pulsar:
+    image: apachepulsar/pulsar:4.0.2
     ports:
-      - "3000:3000"
+      - "6650:6650"
+      - "8089:8080"
+    environment:
+      - PULSAR_STANDALONE_USE_ZOOKEEPER=1
+    command: "bin/pulsar standalone"
+    healthcheck:
+      test: ["CMD", "bin/pulsar-admin", "brokers", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  pulsar-init:
+    image: apachepulsar/pulsar:4.0.2
+    command: >
+      bash -c "sleep 5 && \
+                exec bin/pulsar-admin --admin-url=http://pulsar:8080 namespaces create public/vlpd && \
+                exec bin/pulsar-admin --admin-url=http://pulsar:8080 topics create-partitioned-topic public/vlpd/vessellocations -p 4"
+    depends_on:
+      pulsar:
+        condition: service_healthy
+
+  # pulsar-dashboard:
+  #   image: apachepulsar/pulsar-dashboard:latest
+  #   ports:
+  #     - "8088:80"
+  #   environment:
+  #     - SERVICE_URL=http://pulsar:8080
